@@ -1,7 +1,7 @@
 [project]
 name = "decompnet"
 version = "0.10.6"
-description = "decomp.wtf (What The Function): your AI agent decompiles games you own into C that compiles to the exact same bytes, with a live view. Runs locally."
+description = "MrDecomp: local GUI for AI-assisted matching game decompilation"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -24,10 +24,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://decomp.wtf"
-Source = "https://github.com/i12bp8/decomp.wtf"
+Homepage = "https://github.com/OtherShindo957/MrDecomp"
+Source = "https://github.com/OtherShindo957/MrDecomp"
 
 [project.scripts]
+mrdecomp = "decompnet.app.cli:main"
 decompnet = "decompnet.cli:main"
 decomp = "decompnet.app.cli:main"
 

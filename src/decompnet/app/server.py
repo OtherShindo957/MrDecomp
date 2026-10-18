@@ -33,7 +33,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from .. import __version__, hostenv, toolchains
 from ..network import NetworkError
 from ..rom.n64 import RomError
-from . import agents, chat, collab, connect, tools, updates
+from . import agents, chat, collab, connect, tools, updates, capabilities
 from .engine import COMPILERS, MW_VERSIONS, PLATFORM_STATUS, SHORT_NAMES, TOOLS, RomNetwork
 
 COOKIE = "decomp_live"
@@ -403,7 +403,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                 "log_file": hostenv.shown_path(home / "logs" / "decomp.log"),
                 "projects": projects, "toolchains": tcs, "agents": agents.detect(),
                 "api_presets": agents.API_PRESETS, "settings": settings.public(), "mcp_url": mcp_url,
-                "platform_status": PLATFORM_STATUS,
+                "platform_status": PLATFORM_STATUS, "capabilities": capabilities.registry(),
                 "codewarrior": {"installed": toolchains.installed("mwcc") is not None,
                                 "ds_installed": toolchains.installed("mwccarm") is not None, **MW_VERSIONS}}
 
@@ -444,6 +444,10 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         if (bad := guard(request, write=True)):
             return bad
         q = request.query_params
+        try:
+            capabilities.require_mode(q.get("mode", "decompilation"))
+        except ValueError as e:
+            return fail(e)
         toolchain = q.get("toolchain") or None
         if q.get("demo") == "1":
             game: bytes | Path | None = _static("demo/demo-quest-64.z64")
@@ -955,19 +959,14 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         """Whether a newer decomp.wtf is out (checked now and then; ?refresh=1 now) and, POSTed, installing it."""
         if (bad := guard(request, write=request.method == "POST")):
             return bad
+        message = "MrDecomp updates must be installed from your fork; upstream updates are disabled."
         if request.method == "POST":
-            try:
-                await call(updater.apply)
-            except ValueError as e:
-                return fail(e)
-        refresh = request.query_params.get("refresh") == "1"
-        if not refresh and not checking():  # the user turned checks off: only "Check now" asks
-            return JSONResponse({"disabled": True, "available": False, "current": updates.installed(),
-                                 "job": updater.job, "runtime": hostenv.runtime()})
-        return JSONResponse(await call(lambda: updater.status(refresh)))
+            return fail(ValueError(message))
+        return JSONResponse({"disabled": True, "available": False, "current": updates.installed(),
+                             "job": updater.job, "runtime": hostenv.runtime(), "why_not": message})
 
     def checking() -> bool:
-        return settings.data.get("check_updates", True) is not False and os.environ.get("DECOMP_UPDATES") != "off"
+        return False  # Fork builds must never automatically install an upstream release.
 
     def watch_updates() -> None:
         """Check now and then; with "install updates automatically" on, install one while no helper is working."""
