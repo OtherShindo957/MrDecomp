@@ -1,6 +1,6 @@
 [project]
 name = "decompnet"
-version = "0.10.6"
+version = "0.11.0"
 description = "MrDecomp: local GUI for AI-assisted matching game decompilation"
 readme = "README.md"
 license = "MIT"

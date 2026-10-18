@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.11.0 — verified WebAssembly target and browser execution
+
+- Add executable recompiler adapters with per-target dependencies and validation; preserve legacy matching implementations.
+- Add direct RV32 subset-to-WebAssembly output, fixed memory, execution bounds and Node.js validation/execution.
+- Generate a standalone browser page and authenticated, allowlisted local preview from the GUI.
+- Verify actual native/WebAssembly/reference equivalence with an independent interpreter, randomized programs, boundary accesses and failure states.
+- Execute the real GUI smoke test in headless Chromium, including WebAssembly output, invalid-code/step-limit errors and mobile layout checks.
+- Add a disposable GUI test launcher and optional locked Playwright test dependencies.
+- Correct capability reporting to distinguish experimental program translation from unsupported console game ports.
+- Bump the application version so prior 0.10.6 daemons restart into the updated application.
+
 ## Unreleased — GUI preflight, backend registry and RV32 experiment
 
 - Add dashboard system/backend diagnostics and shared CLI reports distinguishing required/optional tools.
