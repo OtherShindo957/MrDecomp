@@ -9,7 +9,7 @@ MODES = [
     {"id": "recompilation", "name": "Static Recompilation", "status": "planned", "available": False,
      "target": "linux-amd64", "reason": "Game recompilation is not implemented. Use the separate RV32I experiment to translate small supported test programs."},
     {"id": "web", "name": "Web Port", "status": "planned", "available": False,
-     "target": "wasm", "reason": "No browser runtime or verified WebAssembly build pipeline is implemented yet."},
+     "target": "wasm", "reason": "Browser game porting is not implemented. The separate RV32I experiment can build and test WebAssembly programs."},
 ]
 _EXISTING = {"n64": ("Nintendo 64", "MIPS", "supported"),
              "gc": ("GameCube", "PowerPC", "supported"), "wii": ("Wii", "PowerPC", "supported"),
@@ -27,7 +27,7 @@ def registry() -> dict:
     platforms += [{"id": name.lower().replace(" ", "-"), "name": name, "architecture": None,
                    "status": "planned", "modes": {m["id"]: "planned" for m in MODES}} for name in _PLANNED]
     platforms.append({"id": "rv32-test", "name": "RV32I test programs", "architecture": "RISC-V subset",
-                      "status": "experimental", "modes": {"recompilation": "experimental", "decompilation": "unsupported", "native": "unsupported", "web": "unsupported"}})
+                      "status": "experimental", "modes": {"recompilation": "experimental", "decompilation": "unsupported", "native": "unsupported", "web": "experimental"}})
     return {"modes": [dict(m) for m in MODES], "platforms": platforms}
 
 

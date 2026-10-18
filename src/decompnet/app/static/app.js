@@ -2693,9 +2693,10 @@ function renderCapabilities() {
     const mode = caps.modes.find(m => m.id === pick.value);
     $("modeReason").textContent = mode.reason;
     $("drop").hidden = !mode.available;
+    $("modeExperiment").hidden = !["recompilation", "web"].includes(mode.id);
   };
   pick.onchange();
-  $("capabilityList").innerHTML = `<table><thead><tr><th>Game platform</th><th>CPU</th><th>Decompilation</th></tr></thead><tbody>${caps.platforms.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.architecture || "—")}</td><td>${esc(p.status)}</td></tr>`).join("")}</tbody></table><p>Native, recompilation and web pipelines are planned for all platforms. Recognition does not imply a playable port.</p>`;
+  $("capabilityList").innerHTML = `<table><thead><tr><th>Game platform</th><th>CPU</th><th>Decompilation</th><th>Recompilation</th><th>Web</th></tr></thead><tbody>${caps.platforms.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.architecture || "—")}</td><td>${esc(p.modes.decompilation)}</td><td>${esc(p.modes.recompilation)}</td><td>${esc(p.modes.web)}</td></tr>`).join("")}</tbody></table><p>Game-native runtimes remain planned. The RV32I test backend supports experimental native and WebAssembly program execution; it does not provide playable console ports.</p>`;
 }
 
 $("systemCheck").onclick = async () => {
@@ -2707,17 +2708,19 @@ $("systemCheck").onclick = async () => {
 $("backendCheck").onclick = async () => {
   try {
     const d = await api("/api/backends");
-    dialog("Installed platform backends", `<p class="muted">${esc(d.note)}</p><div class="diagnostic-scroll">${d.backends.map(b => `<section class="pad"><h3>${esc(b.name)} · ${esc(b.status)}</h3><p>${esc(b.architecture)} · ${esc(b.modes.join(", "))}</p><p>${b.dependencies.map(t => `${esc(t.id)}: ${t.installed ? "installed" : "missing"}`).join(" · ")}</p><p class="muted small">${esc(b.limitation)}</p></section>`).join("")}</div><button class="ghost" data-close type="button">Close</button>`);
+    dialog("Installed platform backends", `<p class="muted">${esc(d.note)}</p><div class="diagnostic-scroll">${d.backends.map(b => `<section class="pad"><h3>${esc(b.name)} · ${esc(b.status)}</h3><p>${esc(b.architecture)} · ${esc(b.modes.join(", "))}</p>${(b.targets || []).map(t => `<p class="small">${esc(t.name)}: ${t.available ? "available" : `missing ${esc(t.missing.join(", "))}`}</p>`).join("")}<p>${b.dependencies.map(t => `${esc(t.id)}: ${t.installed ? "installed" : "missing"}`).join(" · ")}</p><p class="muted small">${esc(b.limitation)}</p></section>`).join("")}</div><button class="ghost" data-close type="button">Close</button>`);
   } catch (e) { toast(esc(e.message), "err"); }
 };
 window.addEventListener("unhandledrejection", event => {
   toast(esc(event.reason?.message || "The operation failed. Check the application log."), "err");
 });
 
+$("modeExperiment").onclick = () => $("recompLab").click();
 $("recompLab").onclick = async () => {
   try {
     const spec = await api("/api/recomp/experiment");
-    const body = dialog("Experimental RV32I static recompilation", `<p>${esc(spec.backend.limitation)}</p><p class="muted small">${esc(spec.input_contract)} Memory: ${spec.memory_bytes} bytes. Limit: ${spec.max_steps} instructions. This is a test program pipeline, not a playable game port.</p><details><summary>Tested instructions</summary><p>${spec.supported_instructions.map(esc).join(", ")}</p></details><label class="field"><span>Raw instruction bytes (hex; CC0 sum demo preloaded)</span><textarea id="rvHex" class="mono" rows="4">${esc(spec.demo_hex)}</textarea></label><label class="field"><span>a0 input (demo computes 1 + … + input)</span><input id="rvInput" type="number" min="0" max="4294967295" step="1" value="10"></label><label class="field"><span>Output parent folder (optional)</span><input id="rvOutput" placeholder="Default: Experiments in project home"></label><div class="row"><button class="primary" id="rvRun" type="button">Translate, compile &amp; execute</button><button class="ghost" data-close type="button">Close</button></div><p id="rvStatus" role="status"></p><pre id="rvLog" class="joblog"></pre><div id="rvResult"></div>`);
+    const body = dialog("Experimental RV32I static recompilation", `<p>${esc(spec.backend.limitation)}</p><p class="muted small">${esc(spec.input_contract)} Memory: ${spec.memory_bytes} bytes. Limit: ${spec.max_steps} instructions. This is a test program pipeline, not a playable game port.</p><details><summary>Tested instructions</summary><p>${spec.supported_instructions.map(esc).join(", ")}</p></details><label class="field"><span>Output target</span><select id="rvTarget">${spec.targets.map(t => `<option value="${esc(t.id)}">${esc(t.name)} · ${t.available ? esc(t.status) : `missing ${esc(t.missing.join(", "))}`}</option>`).join("")}</select></label><label class="field"><span>Raw instruction bytes (hex; CC0 sum demo preloaded)</span><textarea id="rvHex" class="mono" rows="4">${esc(spec.demo_hex)}</textarea></label><label class="field"><span>a0 input (demo computes 1 + … + input)</span><input id="rvInput" type="number" min="0" max="4294967295" step="1" value="10"></label><label class="field"><span>Output parent folder (optional)</span><input id="rvOutput" placeholder="Default: Experiments in project home"></label><div class="row"><button class="primary" id="rvRun" type="button">Translate, compile &amp; execute</button><button class="ghost" data-close type="button">Close</button></div><p id="rvStatus" role="status"></p><pre id="rvLog" class="joblog"></pre><div id="rvResult"></div>`);
+    body.querySelector("#rvTarget").value = $("projectMode").value === "web" ? "wasm" : "linux-amd64";
     body.querySelector("#rvRun").onclick = async () => {
       const button = body.querySelector("#rvRun"), status = body.querySelector("#rvStatus");
       button.disabled = true; status.textContent = "Submitting experiment…";
@@ -2725,13 +2728,13 @@ $("recompLab").onclick = async () => {
       try {
         const argument = Number(body.querySelector("#rvInput").value);
         if (!Number.isInteger(argument) || argument < 0 || argument > 4294967295) throw new Error("a0 must be an unsigned 32-bit integer");
-        const started = await api("/api/recomp/experiment", { method: "POST", body: {hex: body.querySelector("#rvHex").value, argument, output: body.querySelector("#rvOutput").value.trim()} });
+        const started = await api("/api/recomp/experiment", { method: "POST", body: {backend: spec.backend.id, target: body.querySelector("#rvTarget").value, hex: body.querySelector("#rvHex").value, argument, output: body.querySelector("#rvOutput").value.trim()} });
         const result = await followJob(started.job, body.querySelector("#rvLog"), lines => { status.textContent = lines.at(-1) || "Waiting for compiler…"; });
         if (body.querySelector("#rvRun") !== button) return;
         status.textContent = `Execution ${result.execution.state}: a0 = ${result.execution.registers[10]}, ${result.execution.steps} instructions executed`;
-        body.querySelector("#rvResult").innerHTML = `<p>Saved source, input binary, native executable and result: <span class="mono">${esc(result.output)}</span></p><details><summary>Translated C</summary><pre class="code"></pre></details><details><summary>Assembly / decoded instructions</summary><pre class="code"></pre></details>`;
+        body.querySelector("#rvResult").innerHTML = `<p>Saved ${result.target === "wasm" ? "WebAssembly module, browser page, input and verification result" : "source, input binary, native executable and result"}: <span class="mono">${esc(result.output)}</span></p>${result.target === "wasm" ? `<p><a class="primary btn" id="rvPreview" href="/experiments/${encodeURIComponent(started.job)}/index.html" target="_blank" rel="noopener">Open local WebAssembly test</a></p>` : ""}<details><summary>${result.target === "wasm" ? "WebAssembly output" : "Translated C"}</summary><pre class="code"></pre></details><details><summary>Assembly / decoded instructions</summary><pre class="code"></pre></details>`;
         const blocks = body.querySelectorAll("#rvResult pre");
-        blocks[0].textContent = result.source;
+        blocks[0].textContent = result.target === "wasm" ? `program.wasm · ${result.module_bytes} bytes\nVerified in Node.js. Use the local test page to execute it in your browser.` : result.source;
         blocks[1].textContent = result.instructions.map(i => `0x${i.pc.toString(16).padStart(8, "0")}  ${i.op} rd=x${i.rd} rs1=x${i.rs1} rs2=x${i.rs2} imm=${i.imm}`).join("\n");
       } catch (e) { status.textContent = `Failed: ${e.message}`; }
       finally { button.disabled = false; }

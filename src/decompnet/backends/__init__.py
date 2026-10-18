@@ -1,8 +1,11 @@
 """Explicit backend registration. Registration does not execute third-party code or install tools."""
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict
-from typing import Callable
+from dataclasses import dataclass, fields
+from typing import Callable, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..recomp.adapters import Recompiler
 
 
 @dataclass(frozen=True)
@@ -18,9 +21,12 @@ class Backend:
     limitation: str
     probe: Callable[[bytes, str], str | None] | None = None
 
+    recompiler: Recompiler | None = None
+
     def public(self) -> dict:
-        data = asdict(self)
-        data.pop('probe')
+        data = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ('probe', 'recompiler')}
+        if self.recompiler:
+            data['targets'] = self.recompiler.describe()['targets']
         return data
 
 
@@ -40,6 +46,12 @@ class Registry:
             return self._items[key]
         except KeyError:
             raise ValueError(f'Unknown backend: {key}') from None
+
+    def recompiler(self, key: str) -> Recompiler:
+        backend = self.get(key)
+        if backend.recompiler is None or 'recompilation' not in backend.modes:
+            raise ValueError(f'Backend {key} has no executable recompilation pipeline')
+        return backend.recompiler
 
     def entries(self) -> list[dict]:
         return [b.public() for b in self._items.values()]
@@ -70,7 +82,7 @@ def _powerpc(head: bytes, name: str) -> str | None:
         used = [(off, addr, size) for off, addr, size in sections if size]
         if (used and 0x80000000 <= entry < 0x81800000 and
                 all(off >= 0x100 and 0x80000000 <= addr < 0x81800000 and addr + size <= 0x81800000 for off, addr, size in used)):
-            return 'DOL header (section bounds require full validation)' 
+            return 'DOL header (section bounds require full validation)'
     return None
 
 
@@ -97,6 +109,7 @@ def _nds(head: bytes, name: str) -> str | None:
 
 
 def default_registry() -> Registry:
+    from ..recomp.adapters import RV32Recompiler
     reg = Registry()
     for backend in [
         Backend('matching-n64', 'N64 matching (splat)', ('n64',), 'MIPS', ('decompilation',), 'supported',
@@ -112,6 +125,6 @@ def default_registry() -> Registry:
     ]:
         reg.register(backend)
     reg.register(Backend('rv32i-subset', 'RV32I subset experiment', ('rv32-test',), 'RISC-V RV32I subset',
-                         ('recompilation',), 'experimental', ('cc',), ('raw little-endian words',),
-                         '13 tested instructions; no ELF, relocations, syscalls, floating point, or console runtime.'))
+                         ('recompilation',), 'experimental', ('cc', 'node'), ('raw little-endian words',),
+                         '13 tested instructions; no ELF, relocations, syscalls, floating point, or console runtime.', recompiler=RV32Recompiler()))
     return reg
