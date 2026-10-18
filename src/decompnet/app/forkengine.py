@@ -451,7 +451,7 @@ class ForkEngine:
                        "VALUES(?,?,?,?,?,?,?)", (pid, 1, "", None, "projects keep their headers in the tree", time.time(), ""))
             self.net._event(db, pid, None, "fork", event)
 
-    def create_scratch(self, game: Path, *, compiler: str | None = None, log=print) -> str:
+    def create_scratch(self, game: Path, *, compiler: str | None = None, log=print, output: Path | None = None) -> str:
         """A GameCube, Wii or DS game, from scratch: generate the community's project layout for it (dtk-template,
         ds-decomp) and open it like a fork."""
         with open(game, "rb") as f:
@@ -464,7 +464,11 @@ class ForkEngine:
                 log(f"already set up as {p['slug']}")
                 return p["slug"]
         slug = self._free_slug(_slug(f"{info['title']} {info['id']}" if info.get("kind") != "dol" else info["title"]))
-        dest = self.net.workspace / slug
+        destination = output if output is not None else self.net.workspace
+        base, n = slug, 2
+        while (destination / slug).exists() or self.net.store.one("SELECT 1 FROM projects WHERE slug=?", slug):
+            slug, n = f"{base}-{n}", n + 1
+        dest = destination / slug
         try:
             facts = maker.create(dest, game, compiler=compiler, log=log)
         except BaseException:

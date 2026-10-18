@@ -394,13 +394,10 @@ def shortcut(args) -> int:
 
 
 def doctor(args) -> int:
-    import platform
-    import shutil
-    required = {name: shutil.which(name) for name in ("git", "cc", "ld.lld")}
-    print(json.dumps({"application": "MrDecomp", "python": platform.python_version(),
-                      "host_os": platform.system(), "host_architecture": platform.machine(),
-                      "project_home": str(home_dir()), "dependencies": required}, indent=2))
-    return 0 if all(required.values()) else 1
+    from .diagnostics import report
+    result = report(home_dir())
+    print(json.dumps(result, indent=2))
+    return 0 if result["ready"] else 1
 
 
 def main(argv: list[str] | None = None) -> int:

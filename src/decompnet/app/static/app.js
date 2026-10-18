@@ -94,6 +94,7 @@ async function loadState() { S.st = await api("/api/state"); $("navVersion").tex
 
 function route() {
   const h = location.hash;
+  if (["#projectSetup", "#recent"].includes(h)) { document.querySelector(h)?.scrollIntoView(); return; }
   const m = h.match(/^#\/p\/([\w-]+)(?:\/(\w+))?/);
   closeAll();
   closeNav();
@@ -210,6 +211,7 @@ function resetDrop() {
   $("own").checked = false;
   $("analyse").disabled = true;
   $("file").value = "";
+  $("outputFolder").value = "";
 }
 
 const drop = $("drop");
@@ -321,6 +323,7 @@ function notSupported(head, file) {
 const NOT_A_GAME = "That isn't a game file MrDecomp can start from scratch (yet). For other platforms, continue a public decomp.";
 
 async function pickFile(file) {
+  if (!file.size) return toast("The selected file is empty.", "err");
   const head = new Uint8Array(await file.slice(0, 0x9400).arrayBuffer());
   let info = identifyHead(head, file), buf = file;
   if (!info) {
@@ -398,6 +401,7 @@ function fillCompilers(select, current, platform) {
 
 async function runImport(query, file, title, name = "") {
   query += "&mode=" + encodeURIComponent($("projectMode").value || "decompilation");
+  query += "&output=" + encodeURIComponent($("outputFolder").value.trim());
   $("dropIdle").hidden = true;
   $("dropPicked").hidden = true;
   $("dropBusy").hidden = false;
@@ -460,27 +464,54 @@ async function ensureCodeWarrior() {
 
 $("analyse").onclick = async () => {
   if (!picked || $("analyse").disabled) return;
+  const selected = picked;
   const tc = $("compilerRow").hidden ? "" : $("compilerPick").value;
-  const title = `Analysing ${picked.info.title}…`;
-  if (!$("mwConsent").hidden) {
-    $("dropPicked").hidden = true; $("dropBusy").hidden = false; $("impUp").hidden = true;
-    try { await ensureCodeWarrior(); } catch (e) { importFailed("CodeWarrior", e, $("jobLog").textContent); return; }
-  }
-  const body = picked.buf instanceof Blob ? picked.buf : new Blob([picked.buf]);
-  runImport(`confirmed=1${tc ? `&toolchain=${encodeURIComponent(tc)}` : ""}`, body, title, picked.name);
+  try {
+    const blob = selected.buf instanceof Blob ? selected.buf : new Blob([selected.buf]);
+    const head = new Uint8Array(await blob.slice(0, 0x10000).arrayBuffer());
+    const result = await api("/api/preflight", { method: "POST", body: {
+      head: Array.from(head, b => b.toString(16).padStart(2, "0")).join(""),
+      name: selected.name, size: blob.size, platform: selected.info.platform,
+      mode: $("projectMode").value, toolchain: tc, output: $("outputFolder").value.trim()
+    }});
+    const output = result.output_parent;
+    reviewImport(result, async () => {
+      $("outputFolder").value = output;
+      if (!$("mwConsent").hidden) {
+        $("dropPicked").hidden = true; $("dropBusy").hidden = false; $("impUp").hidden = true;
+        try { await ensureCodeWarrior(); } catch (e) { importFailed("CodeWarrior", e, $("jobLog").textContent); return; }
+      }
+      runImport(`confirmed=1${tc ? `&toolchain=${encodeURIComponent(tc)}` : ""}`, blob, `Analysing ${selected.info.title}…`, selected.name);
+    });
+  } catch (e) { toast(esc(e.message), "err"); }
 };
+
+function reviewImport(result, start) {
+  const backends = result.backends.map(b => `${b.name} (${b.architecture}, ${b.status})`).join(", ");
+  const compiler = result.compiler ? `${result.compiler.name}: ${result.compiler.installed ? "installed" : "missing — install from Compilers & tools"}` : "Selected automatically after full validation";
+  const body = dialog("Review project setup", `<dl class="preflight-facts"><div><dt>File</dt><dd>${esc(result.name)}</dd></div><div><dt>Backend</dt><dd>${esc(backends || "No registered backend detected")}</dd></div><div><dt>Compiler</dt><dd>${esc(compiler)}</dd></div><div><dt>Output parent</dt><dd class="mono">${esc(result.output_parent)}</dd></div></dl>${result.warnings.map(w => `<p class="muted small">${esc(w)}</p>`).join("")}<div class="row"><button class="primary" id="confirmImport" type="button" ${result.can_start ? "" : "disabled"}>Create decompilation project</button><button class="ghost" data-close type="button">Back</button></div>`);
+  body.querySelector("#confirmImport").onclick = () => { closeAll(); start(); };
+}
+
 $("pathPick").onclick = (e) => {
   e.stopPropagation();
   const body = dialog("Use a file on this computer", `<p class="muted">For big disc images: MrDecomp reads the file where it is instead of copying it through the browser.</p>
     <label class="field"><span>Path to the game file</span><input id="ppPath" class="mono" placeholder="/home/me/games/my-game.iso"></label>
+    <label class="field"><span>Output folder (optional)</span><input id="ppOutput" placeholder="Default project home"></label>
     <label class="check"><input type="checkbox" id="ppOwn"><span>This is my own copy of this game, obtained legally. The results stay with me for my own use.</span></label>
     <div class="row"><button class="primary" id="ppGo" type="button" disabled>Start decompiling</button><button class="ghost" data-close type="button">Cancel</button></div>`);
   body.querySelector("#ppOwn").onchange = () => { $("ppGo").disabled = !$("ppOwn").checked; };
-  body.querySelector("#ppGo").onclick = () => {
+  body.querySelector("#ppGo").onclick = async () => {
     const path = $("ppPath").value.trim();
     if (!path) return;
-    $("dialog").hidden = true;
-    runImport(`confirmed=1&path=${encodeURIComponent(path)}`, undefined, "Analysing your game…");
+    try {
+      const output = $("ppOutput").value.trim();
+      const result = await api("/api/preflight", { method: "POST", body: {path, output, mode: $("projectMode").value} });
+      closeAll();
+      $("outputFolder").value = output;
+      reviewImport(result, () => runImport(`confirmed=1&path=${encodeURIComponent(path)}`, null, `Analysing ${result.name}…`, result.name));
+    } catch (e) { toast(esc(e.message), "err"); }
+
   };
 };
 $("demoBtn").onclick = () => runImport("demo=1", undefined, "Opening Demo Quest 64…");
@@ -2666,3 +2697,19 @@ function renderCapabilities() {
   pick.onchange();
   $("capabilityList").innerHTML = `<table><thead><tr><th>Game platform</th><th>CPU</th><th>Decompilation</th></tr></thead><tbody>${caps.platforms.map(p => `<tr><td>${esc(p.name)}</td><td>${esc(p.architecture || "—")}</td><td>${esc(p.status)}</td></tr>`).join("")}</tbody></table><p>Native, recompilation and web pipelines are planned for all platforms. Recognition does not imply a playable port.</p>`;
 }
+
+$("systemCheck").onclick = async () => {
+  try {
+    const d = await api("/api/diagnostics");
+    dialog("System dependencies", `<p>${esc(d.host_os)} · ${esc(d.host_architecture)} · Python ${esc(d.python)}</p><p>Project storage: ${esc(d.project_home)} (${d.storage_writable ? "writable" : "not writable"})</p><div class="diagnostic-scroll"><table class="diagnostic-table"><thead><tr><th>Tool</th><th>Purpose</th><th>Status</th></tr></thead><tbody>${d.tools.map(t => `<tr><td>${esc(t.id)}</td><td>${esc(t.purpose)}</td><td>${t.installed ? "Installed" : "Missing"}${t.required ? " (required)" : " (optional)"}</td></tr>`).join("")}</tbody></table></div><p class="muted">${d.notes.map(esc).join(" ")}</p><button class="ghost" data-close type="button">Close</button>`);
+  } catch (e) { toast(esc(e.message), "err"); }
+};
+$("backendCheck").onclick = async () => {
+  try {
+    const d = await api("/api/backends");
+    dialog("Installed platform backends", `<p class="muted">${esc(d.note)}</p><div class="diagnostic-scroll">${d.backends.map(b => `<section class="pad"><h3>${esc(b.name)} · ${esc(b.status)}</h3><p>${esc(b.architecture)} · ${esc(b.modes.join(", "))}</p><p>${b.dependencies.map(t => `${esc(t.id)}: ${t.installed ? "installed" : "missing"}`).join(" · ")}</p><p class="muted small">${esc(b.limitation)}</p></section>`).join("")}</div><button class="ghost" data-close type="button">Close</button>`);
+  } catch (e) { toast(esc(e.message), "err"); }
+};
+window.addEventListener("unhandledrejection", event => {
+  toast(esc(event.reason?.message || "The operation failed. Check the application log."), "err");
+});

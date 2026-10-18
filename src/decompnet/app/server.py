@@ -33,7 +33,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from .. import __version__, hostenv, toolchains
 from ..network import NetworkError
 from ..rom.n64 import RomError
-from . import agents, chat, collab, connect, tools, updates, capabilities
+from . import agents, chat, collab, connect, tools, updates, capabilities, diagnostics
 from .engine import COMPILERS, MW_VERSIONS, PLATFORM_STATUS, SHORT_NAMES, TOOLS, RomNetwork
 
 COOKIE = "decomp_live"
@@ -326,7 +326,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         if request.headers.get("host") not in allowed_hosts:
             return JSONResponse({"error": "bad host"}, status_code=403)
         if not secrets.compare_digest(request.cookies.get(COOKIE, ""), secret):
-            return JSONResponse({"error": "open decomp.wtf from the app or the `decomp` command"}, status_code=401)
+            return JSONResponse({"error": "open MrDecomp from the app or the `mrdecomp` command"}, status_code=401)
         if write and request.headers.get("x-decomp") != "1":
             return JSONResponse({"error": "missing header"}, status_code=403)
         return None
@@ -343,6 +343,66 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
     def fail(e: Exception, code: int = 400) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=code)
+
+    from ..backends import default_registry
+    backends = default_registry()
+
+    @mcp.custom_route("/api/diagnostics", methods=["GET"])
+    async def api_diagnostics(request: Request) -> Response:
+        return guard(request) or JSONResponse(await call(diagnostics.report, net.workspace))
+
+    @mcp.custom_route("/api/backends", methods=["GET"])
+    async def api_backends(request: Request) -> Response:
+        if bad := guard(request):
+            return bad
+        status = await call(toolchains.status)
+        installed = {t["id"]: bool(t["installed"]) for t in status}
+        entries = backends.entries()
+        for entry in entries:
+            entry["dependencies"] = [{"id": name, "installed": installed.get(name, bool(shutil.which(name)))}
+                                     for name in entry["dependencies"]]
+        return JSONResponse({"backends": entries, "note": "Registered adapters are included in this install; game toolchains are separate."})
+
+    @mcp.custom_route("/api/preflight", methods=["POST"])
+    async def api_preflight(request: Request) -> Response:
+        if bad := guard(request, write=True):
+            return bad
+        data = await body(request)
+        try:
+            capabilities.require_mode(str(data.get("mode") or "decompilation"))
+            output = diagnostics.output_parent(data.get("output", ""), net.workspace)
+            if data.get("path"):
+                path = hostenv.local_path(str(data["path"]))
+                with path.open("rb") as stream:
+                    head = stream.read(0x10000)
+                filename, size = path.name, path.stat().st_size
+            else:
+                raw = data.get("head", "")
+                if not isinstance(raw, str) or len(raw) > 0x20000:
+                    raise ValueError("Preflight accepts at most 64 KiB of header data")
+                head = bytes.fromhex(raw)
+                filename, size = str(data.get("name", "")), data.get("size")
+            if not head:
+                raise ValueError("Choose a nonempty game file")
+            detected = backends.detect(head, filename)
+            # Browser hints can refine dependency advice, but never establish compatibility.
+            hint = str(data.get("platform") or "")
+            candidates = detected or [b for b in backends.entries() if hint in b["platforms"]]
+            tc = str(data.get("toolchain") or "")
+            if tc.startswith(("GC/", "Wii/")):
+                tc = "mwcc"
+            elif tc.startswith("DS/"):
+                tc = "mwccarm"
+            tc_status = {t["id"]: t for t in await call(toolchains.status)}
+            compiler = tc_status.get(tc) if tc else None
+            return JSONResponse({"name": filename, "size": size, "mode": "decompilation",
+                                 "output_parent": str(output), "detected": detected,
+                                 "backends": candidates, "compiler": compiler,
+                                 "can_start": bool(candidates),
+                                 "warnings": ["Header recognition is provisional. Full import validates the game.",
+                                              "A unique project subfolder is created inside the selected output folder."]})
+        except (ValueError, OSError) as e:
+            return fail(e)
 
     # ------------------------------------------------------------------ pages
 
@@ -446,6 +506,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         q = request.query_params
         try:
             capabilities.require_mode(q.get("mode", "decompilation"))
+            output = diagnostics.output_parent(q.get("output", ""), net.workspace)
         except ValueError as e:
             return fail(e)
         toolchain = q.get("toolchain") or None
@@ -483,7 +544,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
         def work(log):
             try:
-                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log)
+                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log, output=output)
             finally:
                 if uploaded:
                     shutil.rmtree(game.parent, ignore_errors=True)
