@@ -1,3 +1,29 @@
+# MrDecomp
+
+Current development version: **0.11.0**.
+
+MrDecomp is a GUI-first fork of [decomp.wtf](https://github.com/i12bp8/decomp.wtf), preserving its MIT license and matching decompilation engine. The local browser GUI needs no external hosting or paid AI account to open.
+
+## Linux AMD64 quick start
+
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/), clone this fork, then run `bash packaging/install-linux.sh`. The installer uses an isolated Python 3.12 environment and adds an applications-menu launcher. It does not use sudo or install game compilers. Debian 12 can use uv-managed Python 3.12 rather than replacing system Python.
+
+Run `mrdecomp` to start the backend and open the GUI. `mrdecomp --help`, `mrdecomp --version`, and `mrdecomp doctor` are available. Diagnostics return a nonzero status for missing build tools; they never install dependencies. The dashboard now offers **System dependencies** and **Installed backends** dialogs. Missing optional tools such as `ld.lld` or `emcc` are reported separately from application readiness. Game imports offer a compatibility review, compiler status, and a local output-parent folder before creation.
+
+New installations store projects in `~/MrDecomp`; existing `~/Decomp` folders remain in use. `MRDECOMP_HOME` overrides the location; `DECOMP_HOME` remains compatible. The Python distribution/module name `decompnet` and legacy commands remain compatible with upstream projects and MCP agents.
+
+The standard game import pipeline currently supports **decompilation**. The separate **Recompilation experiment** translates a tested RV32I subset to either C for Linux AMD64 or a standalone WebAssembly module. It verifies actual execution with bounded guest memory and instruction count. The WebAssembly target includes a local browser test page you can open directly from the GUI; it needs Node.js for verification, without Emscripten. The bundled CC0 sum fixture returns 55 for input 10; this does not establish console or playable game support. See [the experiment contract](examples/rv32/README.md). The GUI displays native PC port, static recompilation, and web port modes as planned and explains the missing pipeline. Existing N64, GameCube, Wii, PS1, PS2, GBA, and DS workflows remain; compiler availability and per-game setup still determine success. Recognition and matching are not proof of a playable PC port.
+
+To update, pull this fork and rerun the installer. Upstream application auto-updates are disabled to prevent replacing the fork. To uninstall: `uv tool uninstall decompnet`, then remove `~/.local/share/applications/mrdecomp.desktop` and `~/.local/share/icons/hicolor/scalable/apps/mrdecomp.svg`. Project folders are retained.
+
+See [ROADMAP.md](ROADMAP.md) and [DEVELOPMENT.md](DEVELOPMENT.md) for implementation status and continuation notes.
+
+---
+
+## Upstream documentation and attribution
+
+The following documentation describes the inherited engine and upstream distribution. Use the MrDecomp installation instructions above for this fork.
+
 ## This project is discontinued
 
 I've decided to stop working on decomp.wtf and archive it.

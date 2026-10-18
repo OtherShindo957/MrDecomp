@@ -33,7 +33,7 @@ from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Re
 from .. import __version__, hostenv, toolchains
 from ..network import NetworkError
 from ..rom.n64 import RomError
-from . import agents, chat, collab, connect, tools, updates
+from . import agents, chat, collab, connect, tools, updates, capabilities, diagnostics
 from .engine import COMPILERS, MW_VERSIONS, PLATFORM_STATUS, SHORT_NAMES, TOOLS, RomNetwork
 
 COOKIE = "decomp_live"
@@ -326,7 +326,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         if request.headers.get("host") not in allowed_hosts:
             return JSONResponse({"error": "bad host"}, status_code=403)
         if not secrets.compare_digest(request.cookies.get(COOKIE, ""), secret):
-            return JSONResponse({"error": "open decomp.wtf from the app or the `decomp` command"}, status_code=401)
+            return JSONResponse({"error": "open MrDecomp from the app or the `mrdecomp` command"}, status_code=401)
         if write and request.headers.get("x-decomp") != "1":
             return JSONResponse({"error": "missing header"}, status_code=403)
         return None
@@ -343,6 +343,113 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
     def fail(e: Exception, code: int = 400) -> JSONResponse:
         return JSONResponse({"error": str(e)}, status_code=code)
+
+    from ..backends import default_registry
+    backends = default_registry()
+
+    @mcp.custom_route("/api/recomp/experiment", methods=["GET", "POST"])
+    async def api_recomp_experiment(request: Request) -> Response:
+        if bad := guard(request, write=request.method == "POST"):
+            return bad
+        if request.method == "GET":
+            try:
+                key = request.query_params.get("backend", "rv32i-subset")
+                adapter = backends.recompiler(key)
+                return JSONResponse({"backend": backends.get(key).public(), **adapter.describe()})
+            except ValueError as e:
+                return fail(e)
+        data = await body(request)
+        try:
+            key = str(data.get("backend") or "rv32i-subset")
+            adapter = backends.recompiler(key)
+            target = str(data.get("target") or "linux-amd64")
+            raw = data.get("hex", "")
+            if not isinstance(raw, str) or len(raw) > adapter.describe()["max_bytes"] * 3:
+                raise ValueError("Experiment input is too large")
+            code = bytes.fromhex(raw)
+            argument = data.get("argument", 10)
+            adapter.validate(code, argument, target)
+            parent = diagnostics.output_parent(data.get("output", ""), net.workspace / "Experiments")
+            if sum(j["kind"] == "recompilation" and j["state"] == "running" for j in jobs.jobs.values()) >= 2:
+                return fail(ValueError("Two recompilation experiments are already running"), 409)
+            root = parent / ("rv32-" + uuid.uuid4().hex)
+            return JSONResponse({"job": jobs.start("recompilation", lambda log: adapter.build(code, root, argument, target, log))})
+        except (ValueError, OSError) as e:
+            return fail(e)
+
+    @mcp.custom_route("/experiments/{job_id}/{filename}", methods=["GET"])
+    async def api_experiment_asset(request: Request) -> Response:
+        if bad := guard(request):
+            return bad
+        job = jobs.jobs.get(request.path_params["job_id"])
+        result = job.get("result") if job and job["state"] == "done" else None
+        filename = request.path_params["filename"]
+        allowed = {"index.html", "browser.js", "style.css", "program.wasm"}
+        if not result or result.get("target") != "wasm" or filename not in allowed:
+            return fail(ValueError("No verified WebAssembly artifact at this address"), 404)
+        try:
+            path = Path(result["output"]) / filename
+            return Response(await call(path.read_bytes), media_type=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+                            headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+        except OSError as e:
+            return fail(e, 404)
+
+    @mcp.custom_route("/api/diagnostics", methods=["GET"])
+    async def api_diagnostics(request: Request) -> Response:
+        return guard(request) or JSONResponse(await call(diagnostics.report, net.workspace))
+
+    @mcp.custom_route("/api/backends", methods=["GET"])
+    async def api_backends(request: Request) -> Response:
+        if bad := guard(request):
+            return bad
+        status = await call(toolchains.status)
+        installed = {t["id"]: bool(t["installed"]) for t in status}
+        entries = backends.entries()
+        for entry in entries:
+            entry["dependencies"] = [{"id": name, "installed": installed.get(name, bool(shutil.which(name)))}
+                                     for name in entry["dependencies"]]
+        return JSONResponse({"backends": entries, "note": "Registered adapters are included in this install; game toolchains are separate."})
+
+    @mcp.custom_route("/api/preflight", methods=["POST"])
+    async def api_preflight(request: Request) -> Response:
+        if bad := guard(request, write=True):
+            return bad
+        data = await body(request)
+        try:
+            capabilities.require_mode(str(data.get("mode") or "decompilation"))
+            output = diagnostics.output_parent(data.get("output", ""), net.workspace)
+            if data.get("path"):
+                path = hostenv.local_path(str(data["path"]))
+                with path.open("rb") as stream:
+                    head = stream.read(0x10000)
+                filename, size = path.name, path.stat().st_size
+            else:
+                raw = data.get("head", "")
+                if not isinstance(raw, str) or len(raw) > 0x20000:
+                    raise ValueError("Preflight accepts at most 64 KiB of header data")
+                head = bytes.fromhex(raw)
+                filename, size = str(data.get("name", "")), data.get("size")
+            if not head:
+                raise ValueError("Choose a nonempty game file")
+            detected = backends.detect(head, filename)
+            # Browser hints can refine dependency advice, but never establish compatibility.
+            hint = str(data.get("platform") or "")
+            candidates = detected or [b for b in backends.entries() if hint in b["platforms"]]
+            tc = str(data.get("toolchain") or "")
+            if tc.startswith(("GC/", "Wii/")):
+                tc = "mwcc"
+            elif tc.startswith("DS/"):
+                tc = "mwccarm"
+            tc_status = {t["id"]: t for t in await call(toolchains.status)}
+            compiler = tc_status.get(tc) if tc else None
+            return JSONResponse({"name": filename, "size": size, "mode": "decompilation",
+                                 "output_parent": str(output), "detected": detected,
+                                 "backends": candidates, "compiler": compiler,
+                                 "can_start": bool(candidates),
+                                 "warnings": ["Header recognition is provisional. Full import validates the game.",
+                                              "A unique project subfolder is created inside the selected output folder."]})
+        except (ValueError, OSError) as e:
+            return fail(e)
 
     # ------------------------------------------------------------------ pages
 
@@ -403,7 +510,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
                 "log_file": hostenv.shown_path(home / "logs" / "decomp.log"),
                 "projects": projects, "toolchains": tcs, "agents": agents.detect(),
                 "api_presets": agents.API_PRESETS, "settings": settings.public(), "mcp_url": mcp_url,
-                "platform_status": PLATFORM_STATUS,
+                "platform_status": PLATFORM_STATUS, "capabilities": capabilities.registry(),
                 "codewarrior": {"installed": toolchains.installed("mwcc") is not None,
                                 "ds_installed": toolchains.installed("mwccarm") is not None, **MW_VERSIONS}}
 
@@ -444,6 +551,11 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         if (bad := guard(request, write=True)):
             return bad
         q = request.query_params
+        try:
+            capabilities.require_mode(q.get("mode", "decompilation"))
+            output = diagnostics.output_parent(q.get("output", ""), net.workspace)
+        except ValueError as e:
+            return fail(e)
         toolchain = q.get("toolchain") or None
         if q.get("demo") == "1":
             game: bytes | Path | None = _static("demo/demo-quest-64.z64")
@@ -479,7 +591,7 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
 
         def work(log):
             try:
-                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log)
+                slug = net.import_rom(game, toolchain=toolchain, confirmed=True, name=name, log=log, output=output)
             finally:
                 if uploaded:
                     shutil.rmtree(game.parent, ignore_errors=True)
@@ -955,19 +1067,14 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
         """Whether a newer decomp.wtf is out (checked now and then; ?refresh=1 now) and, POSTed, installing it."""
         if (bad := guard(request, write=request.method == "POST")):
             return bad
+        message = "MrDecomp updates must be installed from your fork; upstream updates are disabled."
         if request.method == "POST":
-            try:
-                await call(updater.apply)
-            except ValueError as e:
-                return fail(e)
-        refresh = request.query_params.get("refresh") == "1"
-        if not refresh and not checking():  # the user turned checks off: only "Check now" asks
-            return JSONResponse({"disabled": True, "available": False, "current": updates.installed(),
-                                 "job": updater.job, "runtime": hostenv.runtime()})
-        return JSONResponse(await call(lambda: updater.status(refresh)))
+            return fail(ValueError(message))
+        return JSONResponse({"disabled": True, "available": False, "current": updates.installed(),
+                             "job": updater.job, "runtime": hostenv.runtime(), "why_not": message})
 
     def checking() -> bool:
-        return settings.data.get("check_updates", True) is not False and os.environ.get("DECOMP_UPDATES") != "off"
+        return False  # Fork builds must never automatically install an upstream release.
 
     def watch_updates() -> None:
         """Check now and then; with "install updates automatically" on, install one while no helper is working."""

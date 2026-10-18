@@ -662,3 +662,18 @@ a.ghost, a.primary { text-decoration: none; }
 .nav-proj.broken .np-meta, .err-text { color: var(--miss); }
 .credit { margin: 10px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--raise); color: var(--ink-2); max-width: 760px; }
 .credit a { color: inherit; }
+
+/* MrDecomp project setup and read-only diagnostics. */
+.dashboard-actions { margin-bottom: 24px; }
+.hero .mode-panel { grid-column: 1 / -1; }
+.mode-panel table, .diagnostic-table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+.mode-panel th, .mode-panel td, .diagnostic-table th, .diagnostic-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+.diagnostic-scroll { overflow: auto; max-height: 60vh; }
+.preflight-facts { display: grid; gap: 12px; margin: 16px 0; }
+.hero .hero-text { grid-column: 1 / -1; max-width: 920px; }
+.hero .mode-panel { grid-column: 1; align-self: start; }
+.hero .drop { grid-column: 2; align-self: start; }
+.mode-panel details { overflow: auto; max-height: 420px; }
+@media (max-width: 760px) {
+  .hero .mode-panel, .hero .drop { grid-column: 1; }
+}

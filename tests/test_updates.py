@@ -161,7 +161,7 @@ def test_update_api(tmp_path, monkeypatch):
     st = client.get("/api/update").json()
     assert st["available"] is False and st["job"]["state"] == "idle" and "runtime" in st
     r = client.post("/api/update", json={"apply": True}, headers={"X-Decomp": "1"})
-    assert r.status_code == 400 and "up to date" in r.json()["error"]
+    assert r.status_code == 400 and "upstream updates are disabled" in r.json()["error"]
     assert client.post("/api/settings", json={"check_updates": False}, headers={"X-Decomp": "1"}).json()["check_updates"] is False
     assert client.get("/api/update").json()["disabled"] is True
     assert "build" in client.get("/health").json()

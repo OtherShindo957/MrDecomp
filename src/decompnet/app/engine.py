@@ -127,6 +127,7 @@ class RomNetwork(Network):
     def __init__(self, db_path: str | Path, workspace: Path, claim_ttl: int = 30 * 60):
         super().__init__(db_path, claim_ttl=claim_ttl)
         self.workspace = Path(workspace)
+        self._import_lock = threading.RLock()
         self._syms: dict[int, SymbolTable] = {}
         self._sym_override: dict[int, SymbolTable] = {}
         self._roms: dict[int, tuple[bytes, list[split.Segment]]] = {}
@@ -345,7 +346,14 @@ class RomNetwork(Network):
     # ------------------------------------------------------------------ import
 
     def import_rom(self, data: bytes | Path, *, toolchain: str | None = None, flags: list[str] | None = None,
-                   confirmed: bool = False, name: str = "", log=print) -> str:
+                   confirmed: bool = False, name: str = "", log=print, output: Path | None = None) -> str:
+        # Serialize slug allocation and project registration without changing global workspace state.
+        with self._import_lock:
+            return self._import_rom(data, toolchain=toolchain, flags=flags, confirmed=confirmed,
+                                    name=name, log=log, output=output)
+
+    def _import_rom(self, data: bytes | Path, *, toolchain: str | None = None, flags: list[str] | None = None,
+                   confirmed: bool = False, name: str = "", log=print, output: Path | None = None) -> str:
         """Import a game the user owns (ROM bytes, or a file such as a disc image): split it, store every function
         as a target. Returns the slug."""
         if not confirmed:
@@ -353,18 +361,19 @@ class RomNetwork(Network):
         project_file = self._community_layout(data, name)
         if project_file is not None:  # a dtk-template or ds-decomp project, worked on like a fork
             compiler = toolchain if toolchain and toolchain.startswith(("GC/", "Wii/", "DS/")) else None
-            return self.forks.create_scratch(project_file, compiler=compiler, log=log)
+            return self.forks.create_scratch(project_file, compiler=compiler, log=log, output=output)
         picked = detect.identify(data, name)
         rom, info = picked.data, picked.info
         for p in self.store.all("SELECT slug, config FROM projects"):
             if json.loads(p["config"]).get("rom", {}).get("sha1") == info["sha1"]:
                 log(f"already imported as {p['slug']}")
                 return p["slug"]
+        destination = output if output is not None else self.workspace
         base = _slugify(info["title"])
         slug, n = base, 2
-        while self.store.one("SELECT 1 FROM projects WHERE slug=?", slug) or (self.workspace / slug).exists():
+        while self.store.one("SELECT 1 FROM projects WHERE slug=?", slug) or (destination / slug).exists():
             slug, n = f"{base}-{n}", n + 1
-        workdir = self.workspace / slug
+        workdir = destination / slug
         workdir.mkdir(parents=True)
         (workdir / picked.filename).write_bytes(rom)
         size = f"{info['size'] // (1024 * 1024)} MiB" if info["size"] >= 1 << 20 else f"{info['size'] // 1024} KiB"
