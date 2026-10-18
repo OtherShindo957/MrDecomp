@@ -7,7 +7,7 @@ MODES = [
     {"id": "decompilation", "name": "Decompilation", "status": "supported", "available": True,
      "target": "original", "reason": "Matching source reconstruction; requires the appropriate compiler and game setup."},
     {"id": "recompilation", "name": "Static Recompilation", "status": "planned", "available": False,
-     "target": "linux-amd64", "reason": "No verified instruction translation backend is implemented yet."},
+     "target": "linux-amd64", "reason": "Game recompilation is not implemented. Use the separate RV32I experiment to translate small supported test programs."},
     {"id": "web", "name": "Web Port", "status": "planned", "available": False,
      "target": "wasm", "reason": "No browser runtime or verified WebAssembly build pipeline is implemented yet."},
 ]
@@ -26,6 +26,8 @@ def registry() -> dict:
                  for key, (name, cpu, status) in _EXISTING.items()]
     platforms += [{"id": name.lower().replace(" ", "-"), "name": name, "architecture": None,
                    "status": "planned", "modes": {m["id"]: "planned" for m in MODES}} for name in _PLANNED]
+    platforms.append({"id": "rv32-test", "name": "RV32I test programs", "architecture": "RISC-V subset",
+                      "status": "experimental", "modes": {"recompilation": "experimental", "decompilation": "unsupported", "native": "unsupported", "web": "unsupported"}})
     return {"modes": [dict(m) for m in MODES], "platforms": platforms}
 
 

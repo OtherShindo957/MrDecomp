@@ -347,6 +347,34 @@ def build(net: RomNetwork, home: Path, port: int, secret: str):
     from ..backends import default_registry
     backends = default_registry()
 
+    @mcp.custom_route("/api/recomp/experiment", methods=["GET", "POST"])
+    async def api_recomp_experiment(request: Request) -> Response:
+        if bad := guard(request, write=request.method == "POST"):
+            return bad
+        from ..recomp import rv32
+        if request.method == "GET":
+            return JSONResponse({"backend": backends.get("rv32i-subset").public(),
+                                 "supported_instructions": rv32.SUPPORTED, "demo_hex": rv32.demo_program().hex(),
+                                 "memory_bytes": rv32.MEMORY_SIZE, "max_steps": rv32.MAX_STEPS,
+                                 "input_contract": "Raw little-endian words at PC 0; x10/a0 input and result; EBREAK stops the test harness. Code is read-only. Other registers and data memory start at zero."})
+        data = await body(request)
+        try:
+            raw = data.get("hex", "")
+            if not isinstance(raw, str) or len(raw) > rv32.MAX_CODE * 3:
+                raise ValueError("Experiment input is too large")
+            code = bytes.fromhex(raw)
+            rv32.decode(code)  # reject unsupported input before allocating an output folder or compiling
+            argument = data.get("argument", 10)
+            if type(argument) is not int or not 0 <= argument <= 0xffffffff:
+                raise ValueError("a0 input must be an unsigned 32-bit integer")
+            parent = diagnostics.output_parent(data.get("output", ""), net.workspace / "Experiments")
+            if sum(j["kind"] == "recompilation" and j["state"] == "running" for j in jobs.jobs.values()) >= 2:
+                return fail(ValueError("Two recompilation experiments are already running"), 409)
+            root = parent / ("rv32-" + uuid.uuid4().hex)
+            return JSONResponse({"job": jobs.start("recompilation", lambda log: rv32.build_and_run(code, root, argument, log))})
+        except (ValueError, OSError) as e:
+            return fail(e)
+
     @mcp.custom_route("/api/diagnostics", methods=["GET"])
     async def api_diagnostics(request: Request) -> Response:
         return guard(request) or JSONResponse(await call(diagnostics.report, net.workspace))

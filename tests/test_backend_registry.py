@@ -101,6 +101,34 @@ def test_selected_output_reaches_import_without_mutating_global_workspace(app, t
     assert net.workspace == previous
 
 
+def test_experiment_api_reports_actual_execution_and_errors(app, tmp_path):
+    import time
+    import shutil
+    client, _, _ = app
+    spec = client.get('/api/recomp/experiment').json()
+    assert 'SW' in spec['supported_instructions']
+    headers = {'X-Decomp': '1'}
+    assert client.post('/api/recomp/experiment', json={}).status_code == 403
+    for invalid in ({'hex': 'ffffffff'}, {'hex': spec['demo_hex'], 'argument': -1}):
+        assert client.post('/api/recomp/experiment', json=invalid, headers=headers).status_code == 400
+    if not shutil.which('cc'):
+        pytest.skip('native experiment needs cc')
+    for code, expected in ((spec['demo_hex'], 'done'), ('6f000000', 'error')):
+        result = client.post('/api/recomp/experiment', json={'hex': code, 'argument': 10, 'output': str(tmp_path)}, headers=headers)
+        assert result.status_code == 200
+        for _ in range(200):
+            job = client.get('/api/job', params={'id': result.json()['job']}).json()
+            if job['state'] != 'running':
+                break
+            time.sleep(.01)
+        assert job['state'] == expected
+        if expected == 'done':
+            assert job['result']['execution']['registers'][10] == 55
+            assert (Path(job['result']['output']) / 'translated.c').is_file()
+        else:
+            assert 'step-limit' in job['error']
+
+
 def test_community_clone_still_works_without_compiler_tools(tmp_path):
     import subprocess
     import shutil

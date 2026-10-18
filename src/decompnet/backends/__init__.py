@@ -111,4 +111,7 @@ def default_registry() -> Registry:
                 ('mwccarm', 'dsd'), ('DS ROM',), 'Proprietary compiler requires explicit license acceptance.', _nds),
     ]:
         reg.register(backend)
+    reg.register(Backend('rv32i-subset', 'RV32I subset experiment', ('rv32-test',), 'RISC-V RV32I subset',
+                         ('recompilation',), 'experimental', ('cc',), ('raw little-endian words',),
+                         '13 tested instructions; no ELF, relocations, syscalls, floating point, or console runtime.'))
     return reg
