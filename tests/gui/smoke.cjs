@@ -10,7 +10,7 @@ const { chromium } = process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES
   : require('playwright');
 (async () => {
   assert(process.env.MRDECOMP_TEST_URL, 'Set MRDECOMP_TEST_URL to the authenticated local app URL');
-  const browser = await chromium.launch({headless: true});
+  const browser = await chromium.launch({headless: true, executablePath: process.env.MRDECOMP_CHROMIUM || undefined, args: process.env.MRDECOMP_CHROMIUM ? ["--disable-gpu", "--no-zygote"] : []});
   try {
     const page = await browser.newPage({viewport: {width: 1280, height: 900}});
     const errors = [];
@@ -18,6 +18,7 @@ const { chromium } = process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES
     await page.goto(process.env.MRDECOMP_TEST_URL);
     await page.locator('#projectMode option').first().waitFor({state: 'attached'});
     assert.equal(await page.title(), 'MrDecomp');
+    if (process.env.MRDECOMP_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.MRDECOMP_SCREENSHOT_DIR, 'dashboard.png'), fullPage: true});
     await page.selectOption('#projectMode', 'native');
     assert.match(await page.locator('#modeReason').innerText(), /runtime/);
     assert.equal(await page.locator('#drop').isVisible(), false);
@@ -46,7 +47,28 @@ const { chromium } = process.env.CODEX_PRIMARY_RUNTIME_NODE_MODULES
     await page.locator('#rvRun').waitFor();
     await page.click('#rvRun');
     await page.waitForFunction(() => /a0 = 55/.test(document.getElementById('rvStatus')?.textContent || ''), null, {timeout: 45000});
+    await page.selectOption('#rvTarget', 'wasm');
+    await page.click('#rvRun');
+    await page.locator('#rvPreview').waitFor({timeout: 45000});
+    const [preview] = await Promise.all([page.waitForEvent('popup'), page.click('#rvPreview')]);
+    await preview.waitForLoadState();
+    await preview.click('#run');
+    await preview.waitForFunction(() => document.getElementById('result')?.dataset.state === 'halted');
+    assert.match(await preview.locator('#result').innerText(), /"a0": 55/);
+    if (process.env.MRDECOMP_SCREENSHOT_DIR) await preview.screenshot({path: path.join(process.env.MRDECOMP_SCREENSHOT_DIR, 'wasm.png'), fullPage: true});
+    await preview.close();
+    await page.fill('#rvHex', 'ffffffff');
+    await page.click('#rvRun');
+    await page.waitForFunction(() => /Failed:.*Unsupported instruction/.test(document.getElementById('rvStatus')?.textContent || ''));
+    assert.equal(await page.locator('#rvPreview').count(), 0);
+    await page.fill('#rvHex', '6f000000');
+    await page.click('#rvRun');
+    await page.waitForFunction(() => /Failed:.*step-limit/.test(document.getElementById('rvStatus')?.textContent || ''), null, {timeout: 45000});
+    await page.keyboard.press('Escape');
+    await page.setViewportSize({width: 390, height: 844});
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'mobile page must not overflow horizontally');
+    if (process.env.MRDECOMP_SCREENSHOT_DIR) await page.screenshot({path: path.join(process.env.MRDECOMP_SCREENSHOT_DIR, 'mobile.png'), fullPage: true});
     assert.equal(errors.length, 0, errors.join('\n'));
-    console.log('PASS: modes, diagnostics, preflight and actual native recompilation through GUI');
+    console.log('PASS: modes, diagnostics, preflight, native recompilation and actual WebAssembly execution through GUI');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });
